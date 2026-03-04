@@ -1,16 +1,11 @@
-from fastapi import FastAPI
 from playwright.async_api import async_playwright
-import time
-import asyncio
-
-app = FastAPI()
-
-internal_store = {
-    "last_scrape_time": 0,
-    "data": []
-}
+from app.db import players_collection
 
 async def scrape_vlr_stats():
+    # Clear the existing collection before adding fresh data
+    # Note: delete_many is an async operation in Motor, so it needs 'await'
+    await players_collection.delete_many({})
+
     async with async_playwright() as p:
         # Launching with a specific user_agent to look like a real Mac user
         browser = await p.chromium.launch(headless=False)
@@ -38,8 +33,8 @@ async def scrape_vlr_stats():
                 player_name = await player_div.inner_text() if player_div else "Unknown"
                 team_name = await team_div.inner_text() if team_div else "N/A"
                 
-                # Column 2 is Rating, 3 is ACS, 4 is K:D
-                results.append({
+                # Build the player document
+                player_data = {
                     "player": player_name.strip(),
                     "team": team_name.strip(),
                     "rnd": (await cells[1].inner_text()).strip(),
@@ -60,8 +55,15 @@ async def scrape_vlr_stats():
                     "d": (await cells[16].inner_text()).strip(),
                     "a": (await cells[17].inner_text()).strip(),
                     "fk": (await cells[18].inner_text()).strip(),
-                    "fd": (await cells[19].inner_text()).strip()
-                })
+                    "fd": (await cells[19].inner_text()).strip(),
+                    "ID": row
+                }
+                results.append(player_data)
+
+            # Insert all scraped results into the database at once
+            if results:
+                await players_collection.insert_many(results)
+                print(f"Successfully inserted {len(results)} players into the database.")
 
             await browser.close()
             return results
@@ -69,25 +71,3 @@ async def scrape_vlr_stats():
             print(f"Error during scrape: {e}")
             await browser.close()
             return None
-
-@app.get("/stats")
-async def get_vlr_stats():
-    now = time.time()
-    
-    # Cache logic: 1800 seconds = 30 minutes
-    if internal_store["data"] and (now - internal_store["last_scrape_time"] < 1800):
-        return {"source": "cache", "data": internal_store["data"]}
-
-    # Fetch fresh data
-    fresh_data = await scrape_vlr_stats()
-    
-    if fresh_data:
-        internal_store["data"] = fresh_data
-        internal_store["last_scrape_time"] = now
-        return {"source": "live", "data": fresh_data}
-    
-    return {"error": "Could not fetch data from VLR"}
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
