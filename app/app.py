@@ -1,10 +1,10 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from app.db import players_collection
+from app.scrape import scrape_vlr_stats
 
 app = FastAPI()
 
-# Recommended: Add CORS middleware if you plan to connect a frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -14,12 +14,11 @@ app.add_middleware(
 
 @app.get("/")
 async def home():
-    return "HEllO WELCOME TO MY API HOPEFULLY IT WORKS AND YALL LIKE IT"
+    return "HEllO WELCOME TO MY API"
 
 @app.get("/players")
 async def get_players():
     try:
-   
         players_cursor = players_collection.find()
         players = await players_cursor.to_list(length=100)
         
@@ -29,3 +28,11 @@ async def get_players():
         return {"status": "success", "data": players}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/scrape")
+async def trigger_scrape():
+    """Trigger the scraper and update the database"""
+    results = await scrape_vlr_stats("https://www.vlr.gg/event/stats/2760/valorant-masters-santiago-2026")
+    if results:
+        return {"status": "success", "message": f"Inserted {len(results)} players"}
+    raise HTTPException(status_code=500, detail="Scrape failed")
