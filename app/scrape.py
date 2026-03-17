@@ -29,7 +29,6 @@ async def scrape_vlr_stats( event_url : str):
                 player_name = await player_div.inner_text() if player_div else "Unknown"
                 team_name = await team_div.inner_text() if team_div else "N/A"
                 
-                # Build the player document
                 player_data = {
                     "player_id": index + 1,
                     "player": player_name.strip(),
@@ -119,44 +118,59 @@ async def scrape_performance(match_url: str):
             map_urls = []
             for tab in map_tabs:
                 game_id = await tab.get_attribute("data-game-id")
-                if game_id:
+                is_disabled = await tab.get_attribute("data-disabled")
+                
+                if game_id and is_disabled == "0":
                     map_urls.append(f"{base_url}/?game={game_id}&tab=performance")
             
             all_maps_data = []
 
             for url in map_urls:
-                await page.goto(url, wait_until="domcontentloaded")
+                await page.goto(url, wait_until="networkidle")
 
-                table_locator = page.locator("table.mod-adv-stats:visible")
+                table_selector = "table.mod-adv-stats"
                 try:
-                    await table_locator.wait_for(state="visible", timeout=7000)
+                    await page.wait_for_selector(table_selector, state="attached", timeout=10000)
                     
-                    rows = await table_locator.locator("tbody tr").all()
-                    map_stats = []
-                    
-                    for i in range(1, len(rows)):
-                        row = rows[i]
-                        cells = await row.locator("td").all()
-                        
-                        if len(cells) >= 14:
-                            name_el = row.locator("div > div").first
-                            name_text = await name_el.inner_text()
-                            player_name = name_text.split('\n')[0].strip()
-                            
-                            async def get_val(cell_locator):
-                                text = (await cell_locator.inner_text()).strip()
-                                return int(text) if text.isdigit() else 0
+                    visible_tables = page.locator(table_selector).filter(visible=True)
+                    table_count = await visible_tables.count()
 
-                            map_stats.append({
-                                "name": player_name,
-                                "multi_kills": {
-                                    "4k": await get_val(cells[4]),
-                                    "5k": await get_val(cells[5]),
-                                }
-                            })
+                    map_stats = []
+                    for t_idx in range(table_count):
+                        table = visible_tables.nth(t_idx)
+                        rows = await table.locator("tbody tr").all()
+                        
+                        for i in range(1, len(rows)):
+                            row = rows[i]
+                            cells = await row.locator("td").all()
+                            
+                            if len(cells) >= 14:
+                                name_el = row.locator("div > div").first
+                                name_text = await name_el.inner_text()
+                                player_name = name_text.split('\n')[0].strip()
+                                
+                                async def get_val(cell_locator):
+                                    text = (await cell_locator.inner_text()).strip()
+                                    return int(text) if text.isdigit() else 0
+
+                                map_stats.append({
+                                    "name": (await rows[i].locator("div > div").first.inner_text()).split('\n')[0].strip(),
+                                    "2k": (await cells[2].inner_text()).strip(),
+                                    "3k": (await cells[3].inner_text()).strip(),
+                                    "4k": (await cells[4].inner_text()).strip(),
+                                    "5k": (await cells[5].inner_text()).strip(),
+                                    "1v1": (await cells[6].inner_text()).strip(),
+                                    "1v2": (await cells[7].inner_text()).strip(),
+                                    "1v3": (await cells[8].inner_text()).strip(),
+                                    "1v4": (await cells[9].inner_text()).strip(),
+                                    "1v5": (await cells[10].inner_text()).strip(),
+                                    "econ": (await cells[11].inner_text()).strip(),
+                                    "pl": (await cells[12].inner_text()).strip(),
+                                    "de": (await cells[13].inner_text()).strip(),
+                                })
                     
                     all_maps_data.append({"url": url, "stats": map_stats})
-                    # print(f"Scraped {len(map_stats)} players.")
+                    print(f"Done: {url}")
 
                 except Exception as e:
                     print(f"Failed to find table on {url}: {e}")
@@ -169,7 +183,6 @@ async def scrape_performance(match_url: str):
             await browser.close()
             return []
 
-
 async def scrape_match_stats(match_url: str):
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
@@ -181,7 +194,14 @@ async def scrape_match_stats(match_url: str):
 
             # 1. Get the map links
             map_tabs = await page.query_selector_all(".vm-stats-gamesnav-item.js-map-switch")
-            map_urls = [f"{base_url}/?game={await t.get_attribute('data-game-id')}&tab=overview" for t in map_tabs if await t.get_attribute('data-game-id')]
+            map_urls = []
+            
+            for t in map_tabs:
+                game_id = await t.get_attribute("data-game-id")
+                is_disabled = await t.get_attribute("data-disabled")
+                
+                if game_id and is_disabled == "0":
+                    map_urls.append(f"{base_url}/?game={game_id}&tab=overview")
             
             results = []
 
@@ -200,25 +220,23 @@ async def scrape_match_stats(match_url: str):
                     rows = await table.locator("tbody tr").all()
                     for row in rows:
                         cells = await row.locator("td").all()
-                        
-                        if len(cells) >= 4:
-                            # Get Name
-                            name = (await row.locator(".mod-player").inner_text()).split('\n')[0].strip()
-                            
-                            # Get Stats as raw text first to avoid crashes
-                            # index 2 = ACS, index 3 = Kills
-                            raw_acs = await cells[2].locator("span.mod-both").first.inner_text()
-                            raw_kills = await cells[3].locator("span.mod-both").first.inner_text()
-                            
-                            # Simple conversion: float -> int handles the '1.37' issue
+                        if len(cells) >= 13:
                             map_data["players"].append({
-                                "name": name,
-                                "acs": float(raw_acs.strip()),  # Keeps it as 227.0 or 1.37
-                                "kills": int(float(raw_kills.strip())) # Kills are usually whole numbers
+                                "name": (await row.locator(".mod-player").inner_text()).split('\n')[0].strip(),
+                                "acs": (await cells[2].locator("span.mod-both").first.inner_text()).strip(),
+                                "kills": (await cells[3].locator("span.mod-both").first.inner_text()).strip(),
+                                "deaths": (await cells[4].locator("span.mod-both").first.inner_text()).strip(),
+                                "assists": (await cells[5].locator("span.mod-both").first.inner_text()).strip(),
+                                "k_diff": (await cells[6].locator("span.mod-both").first.inner_text()).strip(),
+                                "kast": (await cells[7].locator("span.mod-both").first.inner_text()).strip(),
+                                "adr": (await cells[8].locator("span.mod-both").first.inner_text()).strip(),
+                                "hs_perc": (await cells[9].locator("span.mod-both").first.inner_text()).strip(),
+                                "fk": (await cells[10].locator("span.mod-both").first.inner_text()).strip(),
+                                "fd": (await cells[11].locator("span.mod-both").first.inner_text()).strip(),
+                                "fk_diff": (await cells[12].locator("span.mod-both").first.inner_text()).strip()
                             })
                 
                 results.append(map_data)
-                print(results)
                 print(f"Done: {url}")
 
             await browser.close()
@@ -229,9 +247,43 @@ async def scrape_match_stats(match_url: str):
             await browser.close()
             return []
 
+async def scrape_all_matches(matches: list[str], match_type: int):
+    results = []
+    
+    for match_url in matches:
+        print(f"Testing match: {match_url}")
+        
+        try:
+            if match_type != 0:
+                data = await scrape_performance(match_url)
+            else:
+                data = await scrape_match_stats(match_url)
+            
+            results.append(data)
+            print(f"Successfully finished: {match_url}")
+            
+        except Exception as e:
+            print(f"Error on {match_url}: {e}")
+            
+    return results
+
 async def main():
-    url = "https://www.vlr.gg/626547/paper-rex-vs-all-gamers-valorant-masters-santiago-2026-lr2"
-    await scrape_match_stats(url)
+    event_url = "https://www.vlr.gg/event/matches/2760/valorant-masters-santiago-2026/?series_id=5546"
+    
+    print("Fetching match URLs...")
+    matches_url = await get_matches_url(event_url)
+    
+    if not matches_url:
+        print("No matches found.")
+        return
+
+    print(f"Found {len(matches_url)} matches. Starting sequential test loop...")
+    
+    # This now runs one-by-one
+    results = await scrape_all_matches(matches_url, match_type=1)
+    
+    print(f"Scraped {len(results)} matches successfully.")
 
 if __name__ == "__main__":
+    import asyncio
     asyncio.run(main())

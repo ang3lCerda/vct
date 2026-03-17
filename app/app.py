@@ -30,9 +30,9 @@ async def get_players():
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/scrape")
-async def trigger_scrape():
-    """Trigger the scraper and update the database"""
-    results = await scrape_vlr_stats("https://www.vlr.gg/event/stats/2760/valorant-masters-santiago-2026")
+async def scrape_overall_stats(event_url:str):
+    results = await scrape_vlr_stats(event_url)
     if results:
         return {"status": "success", "message": f"Inserted {len(results)} players"}
     raise HTTPException(status_code=500, detail="Scrape failed")
+
