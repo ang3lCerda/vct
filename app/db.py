@@ -5,4 +5,7 @@ client = AsyncIOMotorClient(os.getenv("MONGODB_URI"))
 db = client.vct_fantasy  
 players_collection = db.players  
 matches_collection = db.matches
+performance_collection=db.performance
+overview_collection=db.overview
+
 
