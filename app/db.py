@@ -7,5 +7,6 @@ players_collection = db.players
 matches_collection = db.matches
 performance_collection=db.performance
 overview_collection=db.overview
+scores_collection=db.scores
 
 
