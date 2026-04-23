@@ -3,10 +3,11 @@ import os
 
 client = AsyncIOMotorClient(os.getenv("MONGODB_URI"))
 db = client.vct_fantasy  
-players_collection = db.players  
+players_collection = db.players
 matches_collection = db.matches
-performance_collection=db.performance
-overview_collection=db.overview
-scores_collection=db.scores
+performance_collection = db.performance
+overview_collection = db.overview
+scores_collection = db.scores
+comp_analysis_collection = db.comp_analysis
 
 
