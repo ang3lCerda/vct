@@ -55,7 +55,27 @@ async def get_enabled_game_ids(page) -> list[str]:
 async def player_name_from_row(row) -> str:
     return (await row.locator(".mod-player").inner_text()).split("\n")[0].strip()
 
-\
+
+async def scrape_events() -> list[dict]:
+    async with browser_page(block_resources=True) as page:
+        try:
+            ## vct tier events only
+            await page.goto("https://www.vlr.gg/events/?tier=60", wait_until="domcontentloaded")
+            items = await page.query_selector_all("a.wf-card.mod-flex.event-item")
+            events = []
+            for item in items:
+                href = await item.get_attribute("href")
+                name_el = await item.query_selector(".event-item-title")
+                name = (await name_el.inner_text()).strip() if name_el else None
+                event_id_match = re.search(r"/event/(\d+)/", href or "")
+                if event_id_match and name:
+                    events.append({"event_id": event_id_match.group(1), "name": name})
+            return events
+        except Exception as e:
+            print(f"Error scraping events: {e}")
+            return []
+
+
 
 async def scrape_vlr_stats(event_url: str):
     await players_collection.delete_many({})
@@ -412,15 +432,15 @@ async def scrape_match_comps(match_url: str, event_id: str):
 
                     # Left team (index 0)
                     left = header.locator(".team:not(.mod-right)")
+                    t1_rounds = (await left.locator(".score").inner_text()).strip()
                     t1_atk = (await left.locator("span.mod-t").inner_text()).strip()
                     t1_def = (await left.locator("span.mod-ct").inner_text()).strip()
-                    t1_rounds = str(int(t1_atk) + int(t1_def))
 
                     # Right team (index 1)
                     right = header.locator(".team.mod-right")
+                    t2_rounds = (await right.locator(".score").inner_text()).strip()
                     t2_atk = (await right.locator("span.mod-t").inner_text()).strip()
                     t2_def = (await right.locator("span.mod-ct").inner_text()).strip()
-                    t2_rounds = str(int(t2_atk) + int(t2_def))
 
                     # Winner — whichever score div has mod-win
                     win_el = await header.locator(".score.mod-win").count()
@@ -454,28 +474,34 @@ async def scrape_match_comps(match_url: str, event_id: str):
 
                     team_agents.append({"team": team["name"], "team_id": team["id"], "comp": agents})
 
-                atk_rounds = [t1_atk, t2_atk]
-                def_rounds = [t1_def, t2_def]
-                total_rounds = [t1_rounds, t2_rounds]
+                t1 = team_agents[0] if len(team_agents) > 0 else {"team": "Unknown", "team_id": None, "comp": []}
+                t2 = team_agents[1] if len(team_agents) > 1 else {"team": "Unknown", "team_id": None, "comp": []}
 
-                for i, entry in enumerate(team_agents):
-                    opp = team_agents[1 - i] if len(team_agents) == 2 else {"team": "Unknown", "team_id": None}
-                    results.append({
-                        "map_id": game_id,
-                        "match_id": match_id,
-                        "event_id": event_id,
-                        "map_name": map_name,
-                        "team": entry["team"],
-                        "team_id": entry["team_id"],
-                        "comp": entry["comp"],
-                        "opponent": opp["team"],
-                        "opponent_id": opp["team_id"],
-                        "rounds_won": total_rounds[i],
-                        "rounds_lost": total_rounds[1 - i],
-                        "attack_rounds_won": atk_rounds[i],
-                        "defense_rounds_won": def_rounds[i],
-                        "won": winner_idx == i if winner_idx is not None else None,
-                    })
+                winner_id = None
+                if winner_idx == 0:
+                    winner_id = t1["team_id"]
+                elif winner_idx == 1:
+                    winner_id = t2["team_id"]
+
+                results.append({
+                    "map_id": game_id,
+                    "match_id": match_id,
+                    "event_id": event_id,
+                    "map_name": map_name,
+                    "team1": t1["team"],
+                    "team1_id": t1["team_id"],
+                    "team1_comp": t1["comp"],
+                    "team1_rounds": t1_rounds,
+                    "team1_attack_rounds": t1_atk,
+                    "team1_defense_rounds": t1_def,
+                    "team2": t2["team"],
+                    "team2_id": t2["team_id"],
+                    "team2_comp": t2["comp"],
+                    "team2_rounds": t2_rounds,
+                    "team2_attack_rounds": t2_atk,
+                    "team2_defense_rounds": t2_def,
+                    "winner_id": winner_id,
+                })
 
             return results
 

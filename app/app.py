@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from app.db import players_collection, performance_collection, scores_collection, comp_analysis_collection
-from app.scrape import scrape_vlr_stats, get_matches_url, scrape_all_matches, scrape_match_scores, scrape_match_comps
+from app.db import players_collection, performance_collection, scores_collection, comp_analysis_collection, events_collection
+from app.scrape import scrape_vlr_stats, get_matches_url, scrape_all_matches, scrape_match_scores, scrape_match_comps, scrape_events
 
 app = FastAPI()
 
@@ -15,6 +15,41 @@ app.add_middleware(
 @app.get("/")
 async def home():
     return {"message": "WELCOME TO THE VCT ANALYSIS API"}
+
+@app.post("/scrape/events")
+async def scrape_and_store_events():
+    try:
+        events = await scrape_events()
+        if not events:
+            raise HTTPException(status_code=500, detail="Scrape returned no events")
+        await events_collection.delete_many({})
+        await events_collection.insert_many(events)
+        return {"status": "success", "count": len(events)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/events")
+async def get_events():
+    try:
+        cursor = events_collection.find({}, {"_id": 0})
+        events = await cursor.to_list(length=500)
+        return {"status": "success", "count": len(events), "data": events}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/events/{event_id}")
+async def get_event_by_id(event_id: str):
+    try:
+        event = await events_collection.find_one({"event_id": event_id}, {"_id": 0})
+        if not event:
+            raise HTTPException(status_code=404, detail="Event not found")
+        return {"status": "success", "data": event}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/matches/performance")
 async def get_all_performance():

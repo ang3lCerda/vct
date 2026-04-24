@@ -9,5 +9,6 @@ performance_collection = db.performance
 overview_collection = db.overview
 scores_collection = db.scores
 comp_analysis_collection = db.comp_analysis
+events_collection = db.events
 
 
