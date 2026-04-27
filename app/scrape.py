@@ -1,7 +1,6 @@
 from contextlib import asynccontextmanager
 from playwright.async_api import async_playwright
 import asyncio
-import json
 import re
 from urllib.parse import urlparse, parse_qs
 
@@ -75,6 +74,28 @@ async def scrape_events() -> list[dict]:
             print(f"Error scraping events: {e}")
             return []
 
+
+
+async def scrape_ongoing_events() -> list[dict]:
+    async with browser_page(block_resources=True) as page:
+        try:
+            await page.goto("https://www.vlr.gg/events/?tier=60", wait_until="domcontentloaded")
+
+            events = []
+            for item in await page.query_selector_all("a.wf-card.mod-flex.event-item"):
+                status_el = await item.query_selector("span.event-item-desc-item-status.mod-ongoing")
+                if not status_el:
+                    continue
+                href = await item.get_attribute("href")
+                name_el = await item.query_selector(".event-item-title")
+                name = (await name_el.inner_text()).strip() if name_el else None
+                event_id_match = re.search(r"/event/(\d+)/", href or "")
+                if event_id_match and name:
+                    events.append({"event_id": event_id_match.group(1), "name": name})
+            return events
+        except Exception as e:
+            print(f"Error scraping ongoing events: {e}")
+            return []
 
 
 async def scrape_vlr_stats(event_url: str):
@@ -567,26 +588,13 @@ async def scrape_event_roster(event_id: str, event_slug: str):
 
 
 async def scrape_all_matches(matches: list[str], match_type: int, event_id: str):
-    prefix_map = {0: "overview", 1: "performance", 2: "scores", 3: "comps"}
-    filename = f"{prefix_map.get(match_type, 'unknown')}_scrape.json"
     scraper = {0: scrape_match_stats, 1: scrape_performance, 2: scrape_match_scores, 3: scrape_match_comps}[match_type]
-
-    first = True
-    with open(filename, "w", encoding="utf-8") as f:
-        f.write("[\n")
-
+    all_results = []
     for match_url in matches:
         data = await scraper(match_url, event_id)
-        with open(filename, "a", encoding="utf-8") as f:
-            if not first:
-                f.write(",\n")
-            json.dump(data, f, indent=4)
-            first = False
-
-    with open(filename, "a", encoding="utf-8") as f:
-        f.write("\n]")
-
-    return None
+        if data:
+            all_results.extend(data)
+    return all_results
 
 
 async def main():

@@ -1,9 +1,17 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Security, Depends
+from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 from app.db import players_collection, performance_collection, scores_collection, comp_analysis_collection, events_collection
-from app.scrape import scrape_vlr_stats, get_matches_url, scrape_all_matches, scrape_match_scores, scrape_match_comps, scrape_events
+from app.scrape import scrape_vlr_stats, get_matches_url, scrape_all_matches, scrape_match_scores, scrape_events, scrape_ongoing_events
+import os
 
 app = FastAPI()
+
+api_key_header = APIKeyHeader(name="X-API-Key")
+
+async def require_api_key(key: str = Security(api_key_header)):
+    if key != os.getenv("API_KEY"):
+        raise HTTPException(status_code=403, detail="Invalid API key")
 
 app.add_middleware(
     CORSMiddleware,
@@ -16,7 +24,7 @@ app.add_middleware(
 async def home():
     return {"message": "WELCOME TO THE VCT ANALYSIS API"}
 
-@app.post("/scrape/events")
+@app.post("/scrape/events", dependencies=[Depends(require_api_key)])
 async def scrape_and_store_events():
     try:
         events = await scrape_events()
@@ -96,44 +104,42 @@ async def get_players():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/scrape/overall")
+@app.post("/scrape/overall", dependencies=[Depends(require_api_key)])
 async def scrape_overall_stats(event_url: str):
     results = await scrape_vlr_stats(event_url)
     if results:
         return {"status": "success", "message": f"Inserted {len(results)} players"}
     raise HTTPException(status_code=500, detail="Scrape failed")
 
-@app.post("/scrape/performance/{event_id}")
+@app.post("/scrape/performance/{event_id}", dependencies=[Depends(require_api_key)])
 async def scrape_event_performance(event_id: str):
     match_urls = await get_matches_url(event_id)
-    event_matches = match_urls if isinstance(match_urls, list) else match_urls.get("urls", [])
+    if not match_urls:
+        raise HTTPException(status_code=404, detail="No matches found for this event")
 
-    event_performance = await scrape_all_matches(event_matches, 1, event_id)
+    results = await scrape_all_matches(match_urls, 1, event_id)
+    if results:
+        await performance_collection.delete_many({"stats.event_id": event_id})
+        await performance_collection.insert_many(results)
+        return {"status": "success", "count": len(results)}
+    return {"status": "error", "message": "Scrape completed but no data was found"}
 
-    if event_performance:
-        flattened = [item for sublist in event_performance for item in (sublist if isinstance(sublist, list) else [sublist])]
-        if flattened:
-            await performance_collection.delete_many({"stats.event_id": event_id})
-            await performance_collection.insert_many(flattened)
-            return {"status": "success", "count": len(flattened)}
-
-@app.post("/scrape/overview/{event_id}")
+@app.post("/scrape/overview/{event_id}", dependencies=[Depends(require_api_key)])
 async def scrape_event_overview(event_id: str):
     try:
         match_urls = await get_matches_url(event_id)
         if not match_urls:
             raise HTTPException(status_code=404, detail="No matches found for this event")
 
-        event_performance = await scrape_all_matches(match_urls, 0, event_id)
-
-        if event_performance:
-            flattened = [item for sublist in event_performance for item in sublist if sublist]
-            if flattened:
-                await performance_collection.delete_many({"stats.event_id": event_id})
-                await performance_collection.insert_many(flattened)
-                return {"status": "success", "count": len(flattened), "event_id": event_id}
+        results = await scrape_all_matches(match_urls, 0, event_id)
+        if results:
+            await performance_collection.delete_many({"stats.event_id": event_id})
+            await performance_collection.insert_many(results)
+            return {"status": "success", "count": len(results), "event_id": event_id}
 
         return {"status": "error", "message": "Scrape completed but no data was found"}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -145,7 +151,7 @@ async def get_performance_count():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.delete("/matches/performance")
+@app.delete("/matches/performance", dependencies=[Depends(require_api_key)])
 async def clear_performance_collection():
     try:
         result = await performance_collection.delete_many({})
@@ -153,7 +159,7 @@ async def clear_performance_collection():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/scrape/scores/{event_id}")
+@app.post("/scrape/scores/{event_id}", dependencies=[Depends(require_api_key)])
 async def scrape_event_scores(event_id: str):
     try:
         match_urls = await get_matches_url(event_id)
@@ -209,11 +215,7 @@ async def _run_comp_analysis_scrape(event_id: str):
             print(f"[comp-analysis] No matches found for event {event_id}")
             return
 
-        all_comps = []
-        for url in match_urls:
-            comps = await scrape_match_comps(url, event_id)
-            all_comps.extend(comps)
-            print(f"[comp-analysis] {url} → {len(comps)} records ({len(all_comps)} total)")
+        all_comps = await scrape_all_matches(match_urls, 3, event_id)
 
         if all_comps:
             await comp_analysis_collection.delete_many({"event_id": event_id})
@@ -224,7 +226,7 @@ async def _run_comp_analysis_scrape(event_id: str):
     except Exception as e:
         print(f"[comp-analysis] Error: {e}")
 
-@app.post("/scrape/comp-analysis/{event_id}")
+@app.post("/scrape/comp-analysis/{event_id}", dependencies=[Depends(require_api_key)])
 async def scrape_comp_analysis(event_id: str, background_tasks: BackgroundTasks):
     match_urls = await get_matches_url(event_id)
     if not match_urls:
@@ -232,6 +234,40 @@ async def scrape_comp_analysis(event_id: str, background_tasks: BackgroundTasks)
     background_tasks.add_task(_run_comp_analysis_scrape, event_id)
     return {"status": "started", "matches": len(match_urls), "event_id": event_id}
 
+
+async def _run_update_ongoing_events(events: list[dict]):
+    try:
+        print(f"[update-ongoing] Updating {len(events)} events")
+        for event in events:
+            event_id = event["event_id"]
+            print(f"[update-ongoing] Processing event {event_id} ({event['name']})")
+            match_urls = await get_matches_url(event_id)
+            if not match_urls:
+                print(f"[update-ongoing] No matches found for event {event_id}")
+                continue
+
+            all_comps = await scrape_all_matches(match_urls, 3, event_id)
+
+            if all_comps:
+                await comp_analysis_collection.delete_many({"event_id": event_id})
+                await comp_analysis_collection.insert_many(all_comps)
+                print(f"[update-ongoing] {event_id} — {len(all_comps)} comp records")
+
+        print("[update-ongoing] Done")
+    except Exception as e:
+        print(f"[update-ongoing] Error: {e}")
+
+@app.post("/scrape/update-ongoing-events", dependencies=[Depends(require_api_key)])
+async def update_ongoing_events(background_tasks: BackgroundTasks):
+    events = await scrape_ongoing_events()
+    if not events:
+        raise HTTPException(status_code=404, detail="No ongoing tier-60 events found")
+    background_tasks.add_task(_run_update_ongoing_events, events)
+    return {
+        "status": "started",
+        "event_count": len(events),
+        "event_ids": [e["event_id"] for e in events],
+    }
 
 @app.get("/comp-analysis/{event_id}")
 async def get_comp_analysis(event_id: str):
