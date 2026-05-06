@@ -14,5 +14,7 @@ overview_collection = db.overview
 scores_collection = db.scores
 comp_analysis_collection = db.comp_analysis
 events_collection = db.events
+comparisons_collection = db.comparisons
+journal_collection = db.journal
 
 
